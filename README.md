@@ -7,11 +7,17 @@ Works pretty damn well
 Usage:
 
 ```sh
-pip install google-genai python-dotenv prompt-toolkit
+git clone https://github.com/qpwo/flash-refactor ~/git/flash-refactor
+echo 'GEMINI_API_KEY=...' > ~/git/flash-refactor/.env
+alias refactor="python ~/git/flash-refactor/refactor.py"
 
-python refactor.py file1.txt file2.py
+pip install google-genai python-dotenv prompt-toolkit
+refactor file1.ts file2.py
 # will ask what change to make with input()
 # modifies files in-place
+
+# handy:
+refactor $(find . -name "*.c")
 ```
 
 
