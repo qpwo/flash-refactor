@@ -1,3 +1,7 @@
+#!/usr/bin/env python
+"""
+split files into chunks, pick out relevant chunks, rewrite them, and apply the changes
+"""
 from collections import defaultdict
 import os
 import re
