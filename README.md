@@ -7,6 +7,8 @@ Works pretty damn well
 Usage:
 
 ```sh
+pip install google-genai python-dotenv prompt-toolkit
+
 python refactor.py file1.txt file2.py
 # will ask what change to make with input()
 # modifies files in-place

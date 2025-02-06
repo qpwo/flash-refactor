@@ -12,7 +12,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
 
-dotenv.load_dotenv("/home/ubuntu/git/newthing/server/.env")  # Load environment variables
+dotenv.load_dotenv()  # Load environment variables
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 
