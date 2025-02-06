@@ -21,5 +21,8 @@ refactor $(find . -name "*.c")
 ```
 
 
-
 Inspired by Victor Taelin's [aoe](https://github.com/VictorTaelin/AI-scripts/blob/main/aoe.mjs)
+
+---
+
+Sometimes it works better to write a plan then rewrite entire files. That's what `refactor-plan.py` does.
