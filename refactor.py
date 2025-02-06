@@ -1,11 +1,10 @@
 from collections import defaultdict
 import os
+import re
 import sys
-import re  # Import the regex module
 
 import dotenv
-import google.generativeai as genai
-from google.generativeai.generative_models import GenerativeModel
+from google import genai
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
@@ -13,7 +12,7 @@ from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
 
 dotenv.load_dotenv()  # Load environment variables
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"], http_options={"api_version": "v1alpha"})
 
 
 def multiline_input(p) -> str:
@@ -79,7 +78,7 @@ def chunk_code(file_path: str, file_content: str) -> Chunks:
         line_number += 1
         c.append(line)
         is_indented = line.strip() and (line.startswith(" ") or line.startswith("\t"))
-        if was_indented and not is_indented and len(c) >= min_chunk_size:
+        if was_indented and line.strip() and not is_indented and len(c) >= min_chunk_size:
             chunk_id = f"{file_path}::{10 * (1 + len(chunks))}"
             chunks[chunk_id] = "\n".join(c)
             c = []
@@ -108,9 +107,9 @@ def stream_print(response) -> str:
     return "".join(coll)
 
 
-def identify_relevant_chunks(model: GenerativeModel, chunks: Chunks, requested_change: str) -> list[ChunkId]:
+def identify_relevant_chunks(chunks: Chunks, requested_change: str) -> list[ChunkId]:
     """Asks the AI to identify relevant chunks that need modification using regex."""
-    prompt = f"""I have the following code chunks.  Please think step by step and identify which chunks need to be changed to implement the following: "{requested_change}".  Only list the chunks that require changes.  Think carefully about it for a long time before you answer.
+    prompt = f"""I have the following code chunks.  Please think step by step and identify which chunks need to be changed to implement the following: "{requested_change}".  Only list the chunks that require changes or provide important context.  Think carefully about it for a long time before you answer.
 
 {format_chunks_xml(chunks)}
 
@@ -120,11 +119,11 @@ Output your final answer in XML like this:
 <chunk-ref id="..."/>
 </final-answer>
 
-Again, the requested change is: "{requested_change}"."""
+Again, the requested change is: "{requested_change}".  Only list the chunks that require changes or provide important context."""
     print("Identifying Relevant Chunks Prompt:")
     print(prompt)
     print("Identifying Relevant Chunks Response:")
-    full_response_text = stream_print(model.generate_content(prompt, stream=True))
+    full_response_text = stream_print(client.models.generate_content_stream(model="gemini-2.0-flash-thinking-exp-01-21", contents=prompt))
 
     chunk_ids = []
     final_answer_match = re.search(r"<final-answer>(.*?)</final-answer>", full_response_text, re.DOTALL)
@@ -138,7 +137,7 @@ Again, the requested change is: "{requested_change}"."""
     return chunk_ids
 
 
-def rewrite_chunks(model: GenerativeModel, chunks: Chunks, requested_change: str) -> Chunks:
+def rewrite_chunks(chunks: Chunks, requested_change: str) -> Chunks:
     """Asks the AI to rewrite the specified chunks, generating all at once, using regex."""
 
     prompt = f"""Rewrite the following code chunks to implement the change: "{requested_change}".
@@ -158,13 +157,14 @@ Output the updated code within XML tags, like this:
 ...
 </final-answer>
 
+You can also make new chunks, just set the id above/below where you want it to go. You can also skip chunks if they don't need to be changed. Delete a chunk by outputting nothing between the tags.
+
 Again, the requested change is: "{requested_change}"."""
     print("Rewrite Chunks Prompt:")
     print(prompt)
 
-    response = model.generate_content(prompt, stream=True)
     print("Rewrite Chunks Response:")
-    full_response_text = stream_print(response)
+    full_response_text = stream_print(client.models.generate_content_stream(model="gemini-2.0-pro-exp-02-05", contents=prompt))
 
     rewritten_chunks = {}
     final_answer_match = re.search(r"<final-answer>(.*?)</final-answer>", full_response_text, re.DOTALL)
@@ -211,8 +211,7 @@ if __name__ == "__main__":
         chunks = chunk_code(file_path, file_content)
         original_chunks.update(chunks)
 
-    flash_model = genai.GenerativeModel("gemini-2.0-flash-thinking-exp-01-21")  # Could also use "models/gemini-1.5-flash-002"
-    relevant_chunk_ids = identify_relevant_chunks(flash_model, original_chunks, requested_change)
+    relevant_chunk_ids = identify_relevant_chunks(original_chunks, requested_change)
 
     if not relevant_chunk_ids:
         raise Exception("No relevant chunks found for modification.")
@@ -220,7 +219,6 @@ if __name__ == "__main__":
     print("relevant chunk ids:", relevant_chunk_ids)
     relevant_chunks = {chunk_id: original_chunks[chunk_id] for chunk_id in relevant_chunk_ids}
 
-    rewrite_model = genai.GenerativeModel("gemini-2.0-pro-exp-02-05")  # Use gemini-pro for rewriting
-    rewritten_chunks = rewrite_chunks(rewrite_model, relevant_chunks, requested_change)
+    rewritten_chunks = rewrite_chunks(relevant_chunks, requested_change)
     # print(rewritten_chunks)
     apply_changes(original_chunks, rewritten_chunks)
