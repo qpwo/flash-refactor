@@ -2,7 +2,7 @@
 
 breaks code into chunks, uses `gemini-2.0-flash-thinking-exp-01-21` to pick relevant chunks, then uses `gemini-2.0-pro-exp-02-05` to rewrite those chunks
 
-Works pretty damn well
+Works pretty damn well. can post success or failure in [the discussions](https://github.com/qpwo/flash-refactor/discussions)
 
 Usage:
 
@@ -19,6 +19,7 @@ refactor file1.ts file2.py
 # handy:
 refactor $(find . -name "*.c")
 ```
+
 
 
 Inspired by Victor Taelin's `AI-scripts`
