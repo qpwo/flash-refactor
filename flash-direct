@@ -1,7 +1,5 @@
 #!/usr/bin/env python
-"""
-make a plan, then rewrite the entire files according to the plan
-"""
+""" does the change in one step (no plan) """
 
 import argparse
 from datetime import datetime
@@ -37,7 +35,7 @@ def stream_print(response) -> str:
 
 def line_join(*parts: str):
     "puts exactly one newline between each part"
-    return "\n".join(line.strip("\n") for line in parts)
+    return "\n".join(part.strip("\n") for part in parts)
 
 
 def tagged(tag: str, *children: str, **attrs):
@@ -57,8 +55,6 @@ def between_tags(tag: str, text: str):
     return text[start:end]
 
 
-# model_name = "gemini-2.0-flash-exp"
-model_name = "gemini-2.0-flash-thinking-exp-01-21"
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
 parser.add_argument("include_files", nargs="+", help="One or more file paths to include for rewriting.")
 parser.add_argument(
@@ -69,7 +65,6 @@ parser.add_argument(
     default=[],
     help="Additional files to provide as context (will not be rewritten)",
 )
-parser.add_argument("-y", "--yes", action="store_true", dest="skip_clarifications", help="Skip the clarifications")
 
 
 args = parser.parse_args()
@@ -126,19 +121,11 @@ def multiline_input(p) -> str:
 
 
 change_request = multiline_input("What to change?")
-last_word = change_request.split()[-1]
-if last_word.lower() == "yes":
-    change_request = change_request[:-3].strip()
-    args.skip_clarifications = True
-if last_word.lower() == "y":
-    change_request = change_request[:-3].strip()
-    args.skip_clarifications = True
 
 
 with open(savedir / "prompt_history.txt", "a") as f:
     f.write(f"---\n{get_timestamp()}\nPrompt:\n{change_request}\n---\n")
 
-# ------------------------------ GENERATE PLAN --------------------------------
 
 context_section = tagged(
     "context-files",
@@ -152,62 +139,6 @@ rewrite_section = tagged(
     *[tagged("current-file", open(p).read(), name=p) for p in args.include_files],
 )
 
-prompt1 = line_join(
-    tagged("change-request", change_request),
-    tagged("context-files", context_section),
-    tagged("files-to-modify", rewrite_section),
-    tagged("change-request-repeated", change_request),
-)
-
-
-sys1 = tagged(
-    "system-instruction",
-    f"""Write a <b>short<b/> plan for the requested code change. Do not write any code.
-Just write a <b>short<b/> plan in precise language, and briefly restate the objective in your own terms.
-Only mention tasks that still need to be done; don't mention tasks that are already complete.
-Mention which of the provided files (if any) you <b>won't<b/> need to modify. Ignore unprovided files.
-<b>Think as long as you need before you begin.<b/>
-Please exclusively use XML for formatting to keep the parser happy.""",
-)
-if False:
-    sys1 = line_join(
-        sys1,
-        tagged(
-            "output-template",
-            tagged(
-                "response",
-                tagged("thinking", "make sure"),
-                tagged("thinking", "you always think out loud before you answer!"),
-                tagged("thinking", "Always think for at least 3 paragraphs!"),
-                tagged(
-                    "plan",
-                    tagged("task", "do this in file_1.ext"),
-                    tagged("task", "do that in file_1.ext"),
-                    tagged("task", "change this in file_2.ext"),
-                    tagged("task", "change that in file_3.ext"),
-                ),
-            ),
-        ),
-    )
-
-
-print("Generating plan...")
-plan_response = stream_print(
-    client.models.generate_content_stream(
-        contents=prompt1,
-        model="gemini-2.0-flash-thinking-exp-01-21",
-        config=GenerateContentConfig(
-            temperature=0.95,
-            max_output_tokens=20_000,
-            system_instruction=sys1,
-        ),
-    )
-)
-
-print("\n")
-plan = between_tags("plan", plan_response)
-cprint(plan + "\n", "green", attrs=["bold"])
-
 # ------------------------------ MODIFY FILES --------------------------------
 
 
@@ -217,54 +148,28 @@ sys2 = tagged(
 Your task is to rewrite the content of files according to user instructions.
 After you are done rewriting all the requested files, summarize <b>what you actually did</b>.
 For each file you rewrite, wrap the complete updated content in <updated-file name="filename.ext">...</updated-file> tags.
-You have already generated a plan, it is included here. Follow this plan carefully.
-Also abide by the user's clarifications if there are any.
 Output the <b>entire</b> updated content of each modified file, not just the changes.
 You may output the files in whatever order you prefer.
 If you don't need to modify a file, then don't output it!
 <b>Think as long as you need before writing each file.</b>
 Please exclusively use XML for formatting to keep the parser happy.""",
 )
-if False:
-    sys2 = line_join(
-        sys2,
-        tagged(
-            "output-template",
-            tagged(
-                "response",
-                tagged("thinking", "make sure"),
-                tagged("thinking", "you always think out loud before you answer!"),
-                tagged("thinking", "Always think for at least 3 paragraphs!"),
-                tagged("updated-file", "only use this tag for the actual file contents", name="filename_1.ext"),
-                tagged("thinking", "dont forget"),
-                tagged("thinking", "to think before"),
-                tagged("thinking", "you write code"),
-                tagged("updated-file", "only use this tag for the actual file contents", name="filename_2.ext"),
-                tagged(
-                    "change-summary",
-                    tagged("li", "I did this in file_1.ext"),
-                    tagged("li", "I did that in file_2.ext"),
-                ),
-            ),
-        ),
-    )
 
-prompt2 = line_join(prompt1, tagged("generated-plan", plan_response))
-
-if args.skip_clarifications:
-    clarifications = "None."
-else:
-    clarifications = multiline_input("Any clarifications?") or "None."
-
-prompt2 = line_join(prompt2, tagged("clarifications", clarifications))
+prompt2 = line_join(
+    tagged("change-request", change_request),
+    tagged("context-files", context_section),
+     rewrite_section,
+    tagged("change-request-repeated", change_request),
+)
 
 full_response = stream_print(
     client.models.generate_content_stream(
         contents=prompt2,
-        model="gemini-2.0-flash-thinking-exp-01-21",
+        # model="gemini-2.0-flash-thinking-exp-01-21",
+        model="gemini-2.0-pro-exp-02-05",
         config=GenerateContentConfig(
-            temperature=0.95,
-            max_output_tokens=60_000,
+            temperature=0.90,
+            max_output_tokens=65_536,
             system_instruction=sys2,
         ),
     )
@@ -272,15 +177,43 @@ full_response = stream_print(
 print("\n")
 # ------------------------------ SAVE FILES --------------------------------
 
-# Regular expression to find file tags and their content
-file_pattern = re.compile(r'<updated-file name="([^"]+)">(.*?)</updated-file>', re.DOTALL)
 
-# Find and process all file matches in the response
-modified_files = []
-for match in file_pattern.finditer(full_response):
-    filename = match.group(1)
-    new_content = match.group(2).strip()
+def parse_re(content: str):
+    # Regular expression to find file tags and their content
+    file_pattern = re.compile(r'<updated-file name="([^"]+)">(.*?)</updated-file>', re.DOTALL)
 
+    # Find and process all file matches in the response
+    for match in file_pattern.finditer(content):
+        filename = match.group(1)
+        new_content = match.group(2).strip()
+        lines = new_content.strip("\n").splitlines()
+        if "```" in lines[0]:
+            lines = lines[1:]
+        if "```" in lines[-1]:
+            lines = lines[:-1]
+        new_content = "\n".join(lines)
+
+        yield filename, new_content
+
+
+def parse_loop(content: str):
+    coll = []
+    filename = ""
+    for line in content.splitlines():
+        if "<updated-file name=" in line:
+            after = line.split("<updated-file name=")[1]
+            filename = after.split('"')[0]
+        elif "</updated-file>" in line:
+            yield filename, "\n".join(coll)
+            coll = []
+            filename = ""
+        elif filename:
+            coll.append(line)
+
+
+for filename, new_content in parse_re(full_response):
+    # for filename, new_content in parse_loop(full_response):
+    modified_files = []
     # Verify the file is in our include_files list
     if filename not in args.include_files:
         print(f"Warning: Model attempted to modify {filename} which wasn't in the include_files list. Skipping.")

@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""
-split files into chunks, pick out relevant chunks, rewrite them, and apply the changes
-"""
+""" Breaks code into chunks then refactors chunks. """
+
 from collections import defaultdict
 import os
 import re
 import sys
+from typing import Iterable
 
 import dotenv
 from google import genai
@@ -71,7 +71,7 @@ Chunks = dict[str, Chunk]  # chunk_id -> chunk_content
 
 def chunk_code(file_path: str, file_content: str) -> Chunks:
     """Chunks the code based on indentation, with a minimum chunk size."""
-    min_chunk_size = 5
+    min_chunk_size = 20
 
     was_indented = False
     chunks: Chunks = {}
@@ -83,14 +83,14 @@ def chunk_code(file_path: str, file_content: str) -> Chunks:
         c.append(line)
         is_indented = line.strip() and (line.startswith(" ") or line.startswith("\t"))
         if was_indented and line.strip() and not is_indented and len(c) >= min_chunk_size:
-            chunk_id = f"{file_path}::{10 * (1 + len(chunks))}"
+            chunk_id = f"{file_path}::{100 * (1 + len(chunks))}"
             chunks[chunk_id] = "\n".join(c)
             c = []
         was_indented = is_indented
 
     # Add the last chunk if it exists
     if c:
-        chunk_id = f"{file_path}::{10 * (1 + len(chunks))}"
+        chunk_id = f"{file_path}::{100 * (1 + len(chunks))}"
         chunks[chunk_id] = "\n".join(c)
 
     return chunks
@@ -119,8 +119,8 @@ def identify_relevant_chunks(chunks: Chunks, requested_change: str) -> list[Chun
 
 Output your final answer in XML like this:
 <final-answer>
-<chunk-ref id="..."/>
-<chunk-ref id="..."/>
+<chunk-ref id="file1.txt::500"/>
+<chunk-ref id="file2.txt::100"/>
 </final-answer>
 
 Again, the requested change is: "{requested_change}".  Only list the chunks that require changes or provide important context."""
@@ -141,27 +141,50 @@ Again, the requested change is: "{requested_change}".  Only list the chunks that
     return chunk_ids
 
 
-def rewrite_chunks(chunks: Chunks, requested_change: str) -> Chunks:
+def line_join(*parts: str):
+    "puts exactly one newline between each part"
+    return "\n".join(part.strip("\n") for part in parts)
+
+
+def tagged(tag: str, *children: str, **attrs):
+    "xml formatting with exact one newline between each part"
+    attr_str = ""
+    if attrs:
+        attr_str = " " + " ".join(f'{k}="{v}"' for k, v in attrs.items())
+    return line_join(f"<{tag}{attr_str}>", *children, f"</{tag}>")
+
+
+def rewrite_chunks(chunks: Chunks, requested_change: str, context_files) -> Chunks:
     """Asks the AI to rewrite the specified chunks, generating all at once, using regex."""
 
+    context_section = tagged(
+        "context-files",
+        tagged("note", "These files are included for context but do not need to be modified."),
+        *[tagged("context-file", open(p).read(), name=p) for p in args.context_files],
+    )
     prompt = f"""Rewrite the following code chunks to implement the change: "{requested_change}".
 Think carefully about it step-by-step before you answer.
 
 {format_chunks_xml(chunks)}
 
+{context_section}
+
 Output the updated code within XML tags, like this:
 
 <final-answer>
-<rewritten-chunk id="[chunk_id_1]">
+<rewritten-chunk id="file1.ext::2500">
 ...
 </rewritten-chunk>
-<rewritten-chunk id="[chunk_id_2]">
+<rewritten-chunk id="file2.ext::1200">
 ...
 </rewritten-chunk>
 ...
 </final-answer>
 
-You can also make new chunks, just set the id above/below where you want it to go. You can also skip chunks if they don't need to be changed. Delete a chunk by outputting nothing between the tags.
+Tips:
+You can also make new chunks, just use an id above/below where you want the new code to go.
+You can skip chunks if they don't need to be changed.
+You can delete chunks with an empty pair of tags.
 
 Again, the requested change is: "{requested_change}"."""
     print("Rewrite Chunks Prompt:")
@@ -174,14 +197,41 @@ Again, the requested change is: "{requested_change}"."""
     final_answer_match = re.search(r"<final-answer>(.*?)</final-answer>", full_response_text, re.DOTALL)
     if final_answer_match:
         final_answer_xml = final_answer_match.group(1)
-        rewritten_chunk_matches = re.finditer(r'<rewritten-chunk id="([^"]*)">\n(.*?)\n</rewritten-chunk>', final_answer_xml, re.DOTALL)
-        for match in rewritten_chunk_matches:
-            chunk_id = match.group(1)
-            rewritten_content = match.group(2)
-            if chunk_id:
-                rewritten_chunks[chunk_id] = rewritten_content
+        rewritten_chunks = parse_rewritten_chunks(final_answer_xml)
+        # rewritten_chunk_matches = re.finditer(r'<rewritten-chunk id="([^"]*)">\n(.*?)\n</rewritten-chunk>', final_answer_xml, re.DOTALL)
+        # for match in rewritten_chunk_matches:
+        #     chunk_id = match.group(1)
+        #     rewritten_content = match.group(2)
+        #     if chunk_id:
+        #         rewritten_chunks[chunk_id] = rewritten_content
 
     return rewritten_chunks
+
+
+def parse_rewritten_chunks(text):
+    """Parse text to find rewritten chunks. Returns iterator of (id, content) tuples."""
+    chunks: Chunks = {}
+    current: list[str] | None = None
+    id = "invalid::0"
+    lines = text.splitlines()
+    for i in range(len(lines)):
+        line = lines[i]
+        s = '<rewritten-chunk id="'
+        if line.startswith(s):
+            line = line[len(s) :]
+            id = line[: line.index('"')]
+            current = []
+        elif line.startswith("</rewritten-chunk") and current is not None:
+            chunks[id] = "\n".join(current)
+            current = None
+        elif current is not None:
+            current.append(line)
+    return chunks
+
+
+def sort_ids(ids: Iterable[str]) -> list[str]:
+    ids = list(ids)
+    return sorted(ids, key=lambda chunk_id: int(chunk_id.split("::")[1]))
 
 
 def apply_changes(original_chunks: Chunks, rewritten_chunks: Chunks) -> None:
@@ -189,7 +239,7 @@ def apply_changes(original_chunks: Chunks, rewritten_chunks: Chunks) -> None:
 
     # Merge original and rewritten chunks, with rewritten taking precedence
     all_chunks = {**original_chunks, **rewritten_chunks}
-    sorted_chunk_ids = sorted(all_chunks.keys(), key=lambda chunk_id: int(chunk_id.split("::")[1]))
+    sorted_chunk_ids = sort_ids(all_chunks.keys())
     new_full_content = defaultdict(list)
     for chunk_id in sorted_chunk_ids:
         file_path = chunk_id.split("::")[0]
@@ -200,13 +250,22 @@ def apply_changes(original_chunks: Chunks, rewritten_chunks: Chunks) -> None:
 
 
 if __name__ == "__main__":
-    # main()
-    # def main() -> None:
-    """Main function to orchestrate the code refactoring process."""
-    if len(sys.argv) < 2:
-        raise Exception("Usage: python refactor.py <file1> <file2> ...")
+    import argparse
 
-    file_paths = sys.argv[1:]
+    parser = argparse.ArgumentParser(description="Orchestrate the code refactoring process.")
+    parser.add_argument("files", metavar="FILE", type=str, nargs="+", help="Files to refactor")
+    parser.add_argument(
+        "-c",
+        "--context",
+        action="append",
+        dest="context_files",
+        default=[],
+        help="Additional files to provide as context (will not be rewritten)",
+    )
+
+    args = parser.parse_args()
+
+    file_paths = args.files
     requested_change = multiline_input("Enter the desired code change")
 
     original_chunks = {}
@@ -220,9 +279,12 @@ if __name__ == "__main__":
     if not relevant_chunk_ids:
         raise Exception("No relevant chunks found for modification.")
 
+    # always include first chunk
+    for file_path in file_paths:
+        relevant_chunk_ids = sort_ids(set(relevant_chunk_ids) | set([f"{file_path}::100"]))
     print("relevant chunk ids:", relevant_chunk_ids)
     relevant_chunks = {chunk_id: original_chunks[chunk_id] for chunk_id in relevant_chunk_ids}
 
-    rewritten_chunks = rewrite_chunks(relevant_chunks, requested_change)
+    rewritten_chunks = rewrite_chunks(relevant_chunks, requested_change, args.context_files)
     # print(rewritten_chunks)
     apply_changes(original_chunks, rewritten_chunks)
